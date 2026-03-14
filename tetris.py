@@ -243,8 +243,15 @@ def get_fall_speed(level):
     return FALL_SPEEDS[min(level, len(FALL_SPEEDS) - 1)]
 
 
+_bag = []
+
 def random_piece():
-    name = random.choice(list(SHAPES.keys()))
+    """Return next piece using 7-bag randomizer."""
+    global _bag
+    if not _bag:
+        _bag = list(SHAPES.keys())
+        random.shuffle(_bag)
+    name = _bag.pop()
     return [row[:] for row in SHAPES[name]], COLORS[name]
 
 
@@ -440,6 +447,7 @@ def main(stdscr):
     curses.init_pair(7, curses.COLOR_WHITE,   curses.COLOR_WHITE)     # L
 
     while True:  # restart loop
+        global _bag; _bag = []  # reset 7-bag on each game start
         board = create_board()
         piece = random_piece()
         next_piece = random_piece()

@@ -484,6 +484,11 @@ def main(stdscr):
                 show_leaderboard(stdscr)
                 last_fall = time.time()  # avoid sudden drop after return
 
+            # --- Restart game (during play) ---
+            if key in (ord('r'), ord('R')):
+                game_result = 'restart'
+                break
+
             shape, color = piece
 
             # --- Input: movement & rotation ---

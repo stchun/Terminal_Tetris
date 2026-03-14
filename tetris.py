@@ -506,11 +506,17 @@ def main(stdscr):
                 if is_valid(board, shape, px, py + 1):
                     py += 1
                     last_fall = now
+                    # Soft drop score: 1 point per cell moved down
+                    score += 1
             elif key == ord(' '):
                 # Hard drop
+                hard_drop_cells = 0
                 while is_valid(board, shape, px, py + 1):
                     py += 1
+                    hard_drop_cells += 1
                 last_fall = 0  # force lock on next gravity tick
+                # Hard drop score: 2 points per cell moved down
+                score += hard_drop_cells * 2
             elif key == HOLD_KEY:
                 # Hold: swap current piece with held piece (once per piece)
                 if not hold_used:

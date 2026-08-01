@@ -4,7 +4,7 @@
 
 | 항목 | 내용 |
 |------|------|
-| 파일 | `tetris.py` (단일 파일, 679줄) |
+| 파일 | `tetris.py` (단일 파일, ~660줄) |
 | 언어 | Python 3 |
 | 주요 라이브러리 | `curses` (터미널 UI), `json` (점수 저장), `random`, `time`, `os`, `datetime` |
 | 실행 방식 | `python3 tetris.py` 또는 shebang(`#!/usr/bin/env python3`) 직접 실행 |
@@ -43,11 +43,21 @@ tetris.py
 │   ├── random_piece()
 │   └── original_piece()
 │
-├── 렌더링 (L.257–410)
-│   └── draw()  — _draw_safe / _draw_str_safe 헬퍼 포함
+├── 게임 상태 (GameState dataclass)
+│   └── board, piece, next_piece, hold_piece, hold_used,
+│       px, py, score, level, total_lines, paused, last_fall, game_over
 │
-└── 게임 루프 (L.413–679)
-    └── main()
+├── 렌더링
+│   └── renderer(stdscr, state)  — _draw_safe / _draw_str_safe 헬퍼 포함
+│
+└── 게임 루프
+    ├── init_colors()               — 색상 페어 초기화
+    ├── new_game_state()            — 게임 세션 초기 GameState 생성
+    ├── handle_input(...)           — 키 입력 처리
+    ├── gravity_tick(...)           — 중력 / 락 / 라인클리어 / 스폰
+    ├── handle_game_over(...)       — 이름 입력 → 점수 저장 → R/L/Q 대기
+    ├── run_game(stdscr)            — 게임 세션 1회 실행
+    └── main(stdscr)                — 색상 초기화 + 재시작 루프
 ```
 
 ---
@@ -86,7 +96,7 @@ def rotate_cw(shape):
     return [list(row) for row in zip(*shape[::-1])]
 ```
 - 행렬 전치 + 역순으로 시계 방향 90° 회전 구현
-- 회전 후 `kick ∈ {0, -1, +1, -2, +2}` 5단계 오프셋을 순차 시도하는 **월 킥** 적용 (`main()` L.507–514)
+- 회전 후 `kick ∈ {0, -1, +1, -2, +2}` 5단계 오프셋을 순차 시도하는 **월 킥** 적용 (`handle_input()` 내)
 
 ### 3-4. 점수 시스템
 
@@ -115,7 +125,7 @@ FALL_SPEEDS = [0.80, 0.72, 0.63, 0.55, 0.47, 0.38, 0.30, 0.22, 0.13, 0.10, 0.08]
 - Hold 시 원형 조각(무회전 상태)으로 저장 (`original_piece()`)
 - Hold 직후 새 위치에서 `is_valid()` 실패 시, 좌우 오프셋(-1/+1)을 한 번 더 시도 → 모두 실패 시 게임 오버 (Q/R/L 가능)
 
-### 3-7. 렌더링 구조 (`draw()`)
+### 3-7. 렌더링 구조 (`renderer()`)
 
 ```
 [왼쪽 패널: Hold]  [중앙: 게임 보드]  [오른쪽 패널: Stats + Next]
@@ -143,24 +153,29 @@ FALL_SPEEDS = [0.80, 0.72, 0.63, 0.55, 0.47, 0.38, 0.30, 0.22, 0.13, 0.10, 0.08]
 
 ```
 main()
+ ├─ init_colors()
  └─ while True (재시작 루프)
-     ├─ 게임 상태 초기화 (board, piece, score, level ...)
-     └─ while game_result is None (메인 루프, ~50fps)
-         ├─ 키 입력 처리
-         │   ├─ Q       → game_result = 'quit'
-         │   ├─ P       → paused 토글
-         │   ├─ L       → show_leaderboard()
-         │   ├─ ←/→     → 좌우 이동
-         │   ├─ ↑       → 회전 + 월 킥
-         │   ├─ ↓       → 소프트 드롭
-         │   ├─ Space   → 하드 드롭 (즉시 낙하)
-         │   └─ F       → Hold (오프셋 재시도 후 게임 오버)
-         ├─ 중력 처리 (FALL_SPEEDS 기반 타이머)
-         │   ├─ 낙하 가능 → py++
-         │   └─ 낙하 불가 → lock → clear_lines → 새 조각 스폰
-         │                    └─ 스폰 실패 → 게임 오버 처리
-         ├─ draw() 호출 (터미널 크기 경고 포함)
-         └─ time.sleep(0.02)  — 약 50fps
+     └─ run_game(stdscr)
+         ├─ new_game_state() — GameState 초기화 (board, piece, score, level ...)
+         └─ while result is None (메인 루프, ~50fps)
+             ├─ handle_input(stdscr, state, key, now)
+             │   ├─ Q       → 'quit' 반환
+             │   ├─ P       → paused 토글
+             │   ├─ L       → show_leaderboard()
+             │   ├─ R       → 'restart' 반환
+             │   ├─ ←/→     → 좌우 이동
+             │   ├─ ↑       → 회전 + 월 킥
+             │   ├─ ↓       → 소프트 드롭
+             │   ├─ Space   → 하드 드롭 (즉시 낙하)
+             │   └─ F       → Hold (오프셋 재시도 실패 시 handle_game_over() 호출)
+             ├─ paused → renderer() 후 continue (gravity_tick 건너뜀)
+             ├─ gravity_tick(stdscr, state, now) — FALL_SPEEDS 기반 타이머
+             │   ├─ 낙하 가능 → py++
+             │   └─ 낙하 불가 → lock → clear_lines → 새 조각 스폰
+             │                    └─ 스폰 실패 → handle_game_over() 호출
+             ├─ renderer(stdscr, state) 호출 (터미널 크기 경고 포함)
+             └─ time.sleep(0.02)  — 약 50fps
+         └─ 'quit'/'restart' 반환 → main()의 재시작 루프에서 처리
 ```
 
 ---
@@ -188,8 +203,8 @@ main()
 | **안정성** | 터미널 크기 부족 시 경고 메시지 표시 (_draw_safe 헬퍼) | ✅ 완료 |
 | **안정성** | Hold 스폰 실패 시 오프셋 재시도 후 게임 오버 | ✅ 완료 |
 | **기능** | SRS(Super Rotation System) 정식 월 킥 테이블 적용 | 예정 |
-| **구조** | `main()` 함수 분리 — 입력 처리 / 물리 / 렌더를 별도 함수로 분리 | 예정 |
-| **구조** | 게임 상태를 dataclass로 묶어 가독성 향상 | 예정 |
+| **구조** | `main()` 함수 분리 — 입력 처리 / 물리 / 렌더를 별도 함수로 분리 | ✅ 완료 |
+| **구조** | 게임 상태를 dataclass로 묶어 가독성 향상 | ✅ 완료 |
 | **테스트** | `is_valid`, `clear_lines`, `rotate_cw` 등 순수 함수 단위 테스트 추가 | 예정 |
 
 ---

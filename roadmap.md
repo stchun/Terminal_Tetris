@@ -17,25 +17,25 @@
 
 ### 🟡 P1 — 구조적 개선 (코드 가독성/유지보수)
 
-#### 3. `main()` 함수 분리
-- **현재**: 모든 로직이 `main(stdscr)` 한 함수에 600줄
-- **개선**: 입력 처리 / 물리 엔진 / 렌더링을 별도 함수로 분리
-- **예상 구조**:
+#### 3. `main()` 함수 분리 ✅
+- **기존**: 모든 로직이 `main(stdscr)` 한 함수에 ~190줄
+- **변경**: 입력 처리 / 물리 엔진 / 렌더링 / 게임오버 처리를 별도 함수로 분리
   ```python
-  def input_handler(stdscr, state): ...   # 키 입력 처리
-  def gravity_tick(board, shape, px, py, level): ...  # 중력 & 고정
-  def renderer(stdscr, board, piece, ...): ...  # 화면 렌더링
+  def init_colors(): ...                       # 색상 초기화
+  def new_game_state() -> GameState: ...        # 게임 세션 초기 상태 생성
+  def handle_input(stdscr, state, key, now): ... # 키 입력 처리 → 'quit'/'restart'/None
+  def gravity_tick(stdscr, state, now): ...      # 중력 & 락 & 라인클리어 & 스폰
+  def handle_game_over(stdscr, state): ...       # 이름 입력 → 점수 저장 → R/L/Q 대기
+  def renderer(stdscr, state): ...               # 화면 렌더링 (구 draw())
+  def run_game(stdscr) -> str: ...               # 한 게임 세션 실행
+  def main(stdscr): ...                          # 색상 초기화 + 재시작 루프
   ```
+- **부가**: `renderer()`(구 `draw()`) 내부에 오른쪽 패널/Paused/Game Over 렌더링이 통째로 중복 정의되어 매 프레임 두 번 그려지던 버그도 함께 제거
 
-#### 4. 게임 상태 Dataclass 도입
-- **현재**: 모든 상태가 `draw()` 인자로 전달 (10개 파라미터!)
-- **개선**: `@dataclass`로 묶어 타입 안정성 향상
-- **예상 구조**:
-  ```python
-  @dataclass
-  class GameState:
-      board, piece, next_piece, hold_piece, ...
-  ```
+#### 4. 게임 상태 Dataclass 도입 ✅
+- **기존**: 모든 상태가 `draw()` 인자로 전달 (10개 파라미터!)
+- **변경**: `@dataclass GameState`로 묶어 함수 간 전달 (board, piece, next_piece, hold_piece, hold_used, px, py, score, level, total_lines, paused, last_fall, game_over)
+- **비고**: #3 분리에 필요한 범위까지만 도입 — 필드 세분화·타입힌트 강화 등 추가 개선은 향후 과제로 남김
 
 #### 5. 문서 vs 코드 일치성 수정
 - **현재**: `analysis.md`에서 "왼쪽 패널: Hold / 오른쪽 패널: Stats + Next"로 기술됨
@@ -85,8 +85,8 @@
 |---|------|------|--------|--------|---------|
 | 1 | 터미널 크기 경고 | 안정성 | 낮음 | 높음 | 🔴 P0 |
 | 2 | Hold 스폰 실패 처리 | 안정성 | 낮음 | 중간 | 🔴 P0 |
-| 3 | main() 분리 | 구조 | 중등도 | 높음 | 🟡 P1 |
-| 4 | GameState dataclass | 구조 | 중등도 | 높음 | 🟡 P1 |
+| 3 | main() 분리 | 구조 | 중등도 | 높음 | ✅ 완료 |
+| 4 | GameState dataclass | 구조 | 중등도 | 높음 | ✅ 완료 |
 | 5 | 문서/코드 일치 수정 | 구조 | 낮음 | 중간 | 🟡 P1 |
 | 6 | SRS 월 킥 테이블 | 기능 | 높음 | 높음 | 🟢 P2 |
 | 7 | 하드 드롭 점수 규칙 | 기능 | 낮음 | 낮음 | 🟢 P2 |

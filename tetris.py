@@ -6,6 +6,7 @@ import json
 import os
 import random
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
 # Board dimensions
@@ -261,7 +262,29 @@ def original_piece(color):
     return [row[:] for row in SHAPES[name]], color
 
 
-def draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used, score, level, lines, paused, game_over=False):
+@dataclass
+class GameState:
+    board: list
+    piece: tuple
+    next_piece: tuple
+    hold_piece: object
+    hold_used: bool
+    px: int
+    py: int
+    score: int
+    level: int
+    total_lines: int
+    paused: bool
+    last_fall: float
+    game_over: bool = False
+
+
+def renderer(stdscr, state):
+    board, piece, px, py = state.board, state.piece, state.px, state.py
+    next_piece, hold_piece, hold_used = state.next_piece, state.hold_piece, state.hold_used
+    score, level, lines = state.score, state.level, state.total_lines
+    paused, game_over = state.paused, state.game_over
+
     stdscr.erase()
     h, w = stdscr.getmaxyx()
 
@@ -423,75 +446,9 @@ def draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used, score,
 
     stdscr.refresh()
 
-    # --- Right panel: stats + Next ---
-    ix = bx + board_pixel_w + 4
-    iy = by
 
-    def info(row, text, bold=False):
-        attr = curses.A_BOLD if bold else 0
-        try:
-            stdscr.addstr(iy + row, ix, text, attr)
-        except curses.error:
-            pass
-
-    info(0,  'TETRIS', bold=True)
-    info(2,  'Score:')
-    info(3,  str(score))
-    info(5,  'Level:')
-    info(6,  str(level))
-    info(8,  'Lines:')
-    info(9,  str(lines))
-    info(11, 'Next:')
-
-    for row_i, row in enumerate(next_shape):
-        for col_i, cell in enumerate(row):
-            if cell:
-                for h_i in range(CELL_H):
-                    try:
-                        stdscr.addstr(iy + 13 + row_i * CELL_H + h_i,
-                                      ix + col_i * CELL_W, '    ', curses.color_pair(next_color))
-                    except curses.error:
-                        pass
-
-    info(19, 'Controls:', bold=True)
-    info(20, '\u2190\u2192  Move')
-    info(21, '\u2191    Rotate')
-    info(22, '\u2193    Soft drop')
-    info(23, 'Spc  Hard drop')
-    info(24, 'F    Hold')
-    info(25, 'P    Pause')
-    info(26, 'L    Leaderboard')
-    info(27, 'R    Restart')
-    info(28, 'Q    Quit')
-
-    # --- Paused overlay ---
-    if paused:
-        msg = '  PAUSED  '
-        try:
-            stdscr.addstr(by + board_pixel_h // 2, bx + (board_pixel_w + 2 - len(msg)) // 2,
-                          msg, curses.A_REVERSE | curses.A_BOLD)
-        except curses.error:
-            pass
-
-    # --- Game Over overlay ---
-    if game_over:
-        overlay_msgs = ['  GAME OVER  ', f'  Score: {score}  ', '  R:Restart  L:Board  Q:Quit  ']
-        mid_y = by + board_pixel_h // 2 - 1
-        for i, msg in enumerate(overlay_msgs):
-            try:
-                stdscr.addstr(mid_y + i, bx + (board_pixel_w + 2 - len(msg)) // 2,
-                              msg, curses.A_REVERSE | curses.A_BOLD)
-            except curses.error:
-                pass
-
-    stdscr.refresh()
-
-
-def main(stdscr):
-    curses.curs_set(0)
-    stdscr.keypad(True)
-
-    # Initialise colors (done once)
+def init_colors():
+    """Initialise curses color pairs (done once at startup)."""
     curses.start_color()
     curses.use_default_colors()
     curses.init_pair(1, curses.COLOR_CYAN,    curses.COLOR_CYAN)      # I
@@ -502,177 +459,201 @@ def main(stdscr):
     curses.init_pair(6, curses.COLOR_BLUE,    curses.COLOR_BLUE)      # J
     curses.init_pair(7, curses.COLOR_WHITE,   curses.COLOR_WHITE)     # L
 
-    while True:  # restart loop
-        global _bag; _bag = []  # reset 7-bag on each game start
-        board = create_board()
-        piece = random_piece()
-        next_piece = random_piece()
-        shape, color = piece
-        px = BOARD_WIDTH // 2 - len(shape[0]) // 2
-        py = 0
 
-        score = 0
-        level = 0
-        total_lines = 0
-        paused = False
-        last_fall = time.time()
-        hold_piece = None
-        hold_used = False
+def new_game_state():
+    """Build a fresh GameState for the start of a game session."""
+    global _bag
+    _bag = []  # reset 7-bag on each game start
+    piece = random_piece()
+    next_piece = random_piece()
+    shape, _ = piece
+    px = BOARD_WIDTH // 2 - len(shape[0]) // 2
 
-        stdscr.nodelay(True)
-        game_result = None  # 'quit' or 'restart'
+    return GameState(
+        board=create_board(),
+        piece=piece,
+        next_piece=next_piece,
+        hold_piece=None,
+        hold_used=False,
+        px=px,
+        py=0,
+        score=0,
+        level=0,
+        total_lines=0,
+        paused=False,
+        last_fall=time.time(),
+    )
 
-        while game_result is None:
-            now = time.time()
-            key = stdscr.getch()
 
-            # --- Quit ---
-            if key in (ord('q'), ord('Q')):
-                game_result = 'quit'
+def handle_game_over(stdscr, state):
+    """Save the score, show the game-over overlay, and wait for R/L/Q. Returns 'quit' or 'restart'."""
+    name = input_name(stdscr, state.score)
+    save_score(state.score, state.level, state.total_lines, name)
+    state.game_over = True
+    stdscr.nodelay(False)
+    result = None
+    while result is None:
+        renderer(stdscr, state)
+        k = stdscr.getch()
+        if k in (ord('q'), ord('Q')):
+            result = 'quit'
+        elif k in (ord('r'), ord('R')):
+            result = 'restart'
+        elif k in (ord('l'), ord('L')):
+            show_leaderboard(stdscr, highlight_score=state.score)
+    return result
+
+
+def handle_input(stdscr, state, key, now):
+    """Process a single key press, mutating state in place. Returns 'quit'/'restart'/None."""
+    if key in (ord('q'), ord('Q')):
+        return 'quit'
+
+    if key in (ord('p'), ord('P')):
+        state.paused = not state.paused
+        if not state.paused:
+            state.last_fall = time.time()
+
+    if state.paused:
+        return None
+
+    if key in (ord('l'), ord('L')):
+        show_leaderboard(stdscr)
+        state.last_fall = time.time()  # avoid sudden drop after return
+
+    if key in (ord('r'), ord('R')):
+        return 'restart'
+
+    shape, color = state.piece
+
+    if key == curses.KEY_LEFT:
+        if is_valid(state.board, shape, state.px - 1, state.py):
+            state.px -= 1
+    elif key == curses.KEY_RIGHT:
+        if is_valid(state.board, shape, state.px + 1, state.py):
+            state.px += 1
+    elif key == curses.KEY_UP:
+        rotated = rotate_cw(shape)
+        # Try wall kicks: 0, -1, +1, -2, +2
+        for kick in (0, -1, 1, -2, 2):
+            if is_valid(state.board, rotated, state.px + kick, state.py):
+                state.piece = (rotated, color)
+                state.px += kick
                 break
-
-            # --- Pause toggle ---
-            if key in (ord('p'), ord('P')):
-                paused = not paused
-                if not paused:
-                    last_fall = time.time()
-
-            if paused:
-                draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used,
-                     score, level, total_lines, paused=True)
-                time.sleep(0.05)
-                continue
-
-            # --- Leaderboard (during play) ---
-            if key in (ord('l'), ord('L')):
-                show_leaderboard(stdscr)
-                last_fall = time.time()  # avoid sudden drop after return
-
-            # --- Restart game (during play) ---
-            if key in (ord('r'), ord('R')):
-                game_result = 'restart'
-                break
-
-            shape, color = piece
-
-            # --- Input: movement & rotation ---
-            if key == curses.KEY_LEFT:
-                if is_valid(board, shape, px - 1, py):
-                    px -= 1
-            elif key == curses.KEY_RIGHT:
-                if is_valid(board, shape, px + 1, py):
-                    px += 1
-            elif key == curses.KEY_UP:
-                rotated = rotate_cw(shape)
-                # Try wall kicks: 0, -1, +1, -2, +2
-                for kick in (0, -1, 1, -2, 2):
-                    if is_valid(board, rotated, px + kick, py):
-                        piece = (rotated, color)
-                        shape = rotated
-                        px += kick
+    elif key == curses.KEY_DOWN:
+        if is_valid(state.board, shape, state.px, state.py + 1):
+            state.py += 1
+            state.last_fall = now
+            # Soft drop score: 1 point per cell moved down
+            state.score += 1
+    elif key == ord(' '):
+        # Hard drop
+        hard_drop_cells = 0
+        while is_valid(state.board, shape, state.px, state.py + 1):
+            state.py += 1
+            hard_drop_cells += 1
+        state.last_fall = 0  # force lock on next gravity tick
+        # Hard drop score: 2 points per cell moved down
+        state.score += hard_drop_cells * 2
+    elif key == HOLD_KEY:
+        # Hold: swap current piece with held piece (once per piece)
+        if not state.hold_used:
+            state.hold_used = True
+            if state.hold_piece is None:
+                state.hold_piece = original_piece(color)
+                state.piece = state.next_piece
+                state.next_piece = random_piece()
+            else:
+                new_hold = original_piece(color)
+                state.piece = state.hold_piece
+                state.hold_piece = new_hold
+            shape, color = state.piece
+            state.px = BOARD_WIDTH // 2 - len(shape[0]) // 2
+            state.py = 0
+            if not is_valid(state.board, shape, state.px, state.py):
+                # Try once more with slight offset (board full → no room anywhere)
+                shifted_ok = False
+                for off in (-1, +1):
+                    if is_valid(state.board, shape, state.px + off, state.py):
+                        state.px += off
+                        shifted_ok = True
                         break
-            elif key == curses.KEY_DOWN:
-                if is_valid(board, shape, px, py + 1):
-                    py += 1
-                    last_fall = now
-                    # Soft drop score: 1 point per cell moved down
-                    score += 1
-            elif key == ord(' '):
-                # Hard drop
-                hard_drop_cells = 0
-                while is_valid(board, shape, px, py + 1):
-                    py += 1
-                    hard_drop_cells += 1
-                last_fall = 0  # force lock on next gravity tick
-                # Hard drop score: 2 points per cell moved down
-                score += hard_drop_cells * 2
-            elif key == HOLD_KEY:
-                # Hold: swap current piece with held piece (once per piece)
-                if not hold_used:
-                    hold_used = True
-                    if hold_piece is None:
-                        hold_piece = original_piece(color)
-                        piece = next_piece
-                        next_piece = random_piece()
-                    else:
-                        new_hold = original_piece(color)
-                        piece = hold_piece
-                        hold_piece = new_hold
-                    shape, color = piece
-                    px = BOARD_WIDTH // 2 - len(shape[0]) // 2
-                    py = 0
-                    if not is_valid(board, shape, px, py):
-                        # Try once more with slight offset (board full → no room anywhere)
-                        shifted_ok = False
-                        for off in (-1, +1):
-                            if is_valid(board, shape, px + off, py):
-                                px += off
-                                shifted_ok = True
-                                break
-                        if not shifted_ok:
-                            # Board full — show game over with retry option
-                            name = input_name(stdscr, score)
-                            save_score(score, level, total_lines, name)
-                            stdscr.nodelay(False)
-                            while True:
-                                draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used,
-                                     score, level, total_lines, paused=False, game_over=True)
-                                k = stdscr.getch()
-                                if k in (ord('q'), ord('Q')):
-                                    game_result = 'quit'
-                                    break
-                                if k in (ord('r'), ord('R')):
-                                    game_result = 'restart'
-                                    break
-                                if k in (ord('l'), ord('L')):
-                                    show_leaderboard(stdscr, highlight_score=score)
-                            break
+                if not shifted_ok:
+                    # Board full — show game over with retry option
+                    return handle_game_over(stdscr, state)
 
-            # --- Gravity ---
-            if now - last_fall >= get_fall_speed(level):
-                if is_valid(board, shape, px, py + 1):
-                    py += 1
-                else:
-                    # Lock piece and spawn next
-                    lock_piece(board, shape, px, py, color)
-                    board, cleared = clear_lines(board)
-                    total_lines += cleared
-                    score += LINE_SCORES.get(cleared, 0) * (level + 1)
-                    level = total_lines // 10
+    return None
 
-                    piece = next_piece
-                    next_piece = random_piece()
-                    shape, color = piece
-                    px = BOARD_WIDTH // 2 - len(shape[0]) // 2
-                    py = 0
-                    hold_used = False  # reset hold availability for new piece
 
-                    if not is_valid(board, shape, px, py):
-                        name = input_name(stdscr, score)
-                        save_score(score, level, total_lines, name)
-                        stdscr.nodelay(False)
-                        while True:
-                            draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used,
-                                 score, level, total_lines, paused=False, game_over=True)
-                            k = stdscr.getch()
-                            if k in (ord('q'), ord('Q')):
-                                game_result = 'quit'
-                                break
-                            if k in (ord('r'), ord('R')):
-                                game_result = 'restart'
-                                break
-                            if k in (ord('l'), ord('L')):
-                                show_leaderboard(stdscr, highlight_score=score)
-                        break
-                last_fall = now
+def gravity_tick(stdscr, state, now):
+    """Apply gravity: fall, lock, clear lines, spawn next piece. Returns 'quit'/'restart'/None."""
+    shape, color = state.piece
+    if now - state.last_fall < get_fall_speed(state.level):
+        return None
 
-            draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used,
-                 score, level, total_lines, paused=False)
-            time.sleep(0.02)
+    if is_valid(state.board, shape, state.px, state.py + 1):
+        state.py += 1
+    else:
+        # Lock piece and spawn next
+        lock_piece(state.board, shape, state.px, state.py, color)
+        state.board, cleared = clear_lines(state.board)
+        state.total_lines += cleared
+        state.score += LINE_SCORES.get(cleared, 0) * (state.level + 1)
+        state.level = state.total_lines // 10
 
-        if game_result == 'quit':
+        state.piece = state.next_piece
+        state.next_piece = random_piece()
+        shape, _ = state.piece
+        state.px = BOARD_WIDTH // 2 - len(shape[0]) // 2
+        state.py = 0
+        state.hold_used = False  # reset hold availability for new piece
+
+        if not is_valid(state.board, shape, state.px, state.py):
+            return handle_game_over(stdscr, state)
+
+    state.last_fall = now
+    return None
+
+
+def run_game(stdscr):
+    """Play a single game session until the player quits or restarts. Returns 'quit' or 'restart'."""
+    state = new_game_state()
+    stdscr.nodelay(True)
+    result = None
+
+    while result is None:
+        now = time.time()
+        key = stdscr.getch()
+
+        result = handle_input(stdscr, state, key, now)
+        if result is not None:
             break
-        # game_result == 'restart': outer while loop continues
+
+        if state.paused:
+            renderer(stdscr, state)
+            time.sleep(0.05)
+            continue
+
+        result = gravity_tick(stdscr, state, now)
+        if result is not None:
+            break
+
+        renderer(stdscr, state)
+        time.sleep(0.02)
+
+    return result
+
+
+def main(stdscr):
+    curses.curs_set(0)
+    stdscr.keypad(True)
+    init_colors()
+
+    while True:
+        result = run_game(stdscr)
+        if result == 'quit':
+            break
+        # result == 'restart': loop continues with a fresh game
 
 
 if __name__ == '__main__':

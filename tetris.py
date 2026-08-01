@@ -268,6 +268,9 @@ def draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used, score,
     shape, color = piece
     next_shape, next_color = next_piece
 
+    # Track terminal size issues — display warning if any rendering operation fails
+    render_errors = []  # list of error description strings
+
     board_pixel_w = BOARD_WIDTH * CELL_W
     board_pixel_h = BOARD_HEIGHT * CELL_H
 
@@ -278,6 +281,20 @@ def draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used, score,
     # Left panel x position
     lx = bx - LEFT_W
 
+    def _draw_safe(r, c, ch, attr=0):
+        """Draw a single character; record error if terminal is too small."""
+        try:
+            stdscr.addch(r, c, ch)
+        except curses.error:
+            render_errors.append("terminal_too_small")
+
+    def _draw_str_safe(y, x, text, attr=0):
+        """Draw a string; record error if terminal is too small."""
+        try:
+            stdscr.addstr(y, x, text, attr)
+        except curses.error:
+            render_errors.append("terminal_too_small")
+
     # --- Compute ghost piece position ---
     ghost_y = py
     while is_valid(board, shape, px, ghost_y + 1):
@@ -285,23 +302,14 @@ def draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used, score,
 
     # --- Draw border ---
     for r in range(board_pixel_h + 2):
-        try:
-            stdscr.addch(by + r, bx, '|')
-            stdscr.addch(by + r, bx + board_pixel_w + 1, '|')
-        except curses.error:
-            pass
+        _draw_safe(by + r, bx, '|')
+        _draw_safe(by + r, bx + board_pixel_w + 1, '|')
     for c in range(board_pixel_w + 2):
-        try:
-            stdscr.addch(by, bx + c, '-')
-            stdscr.addch(by + board_pixel_h + 1, bx + c, '-')
-        except curses.error:
-            pass
+        _draw_str_safe(by, bx + c, '-')
+        _draw_str_safe(by + board_pixel_h + 1, bx + c, '-')
     for corner in [(by, bx), (by, bx + board_pixel_w + 1),
                    (by + board_pixel_h + 1, bx), (by + board_pixel_h + 1, bx + board_pixel_w + 1)]:
-        try:
-            stdscr.addch(corner[0], corner[1], '+')
-        except curses.error:
-            pass
+        _draw_safe(corner[0], corner[1], '+')
 
     # --- Draw locked cells ---
     for row_i, row in enumerate(board):
@@ -309,13 +317,10 @@ def draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used, score,
             sx = bx + 1 + col_i * CELL_W
             for h_i in range(CELL_H):
                 sy = by + 1 + row_i * CELL_H + h_i
-                try:
-                    if cell:
-                        stdscr.addstr(sy, sx, '    ', curses.color_pair(cell))
-                    else:
-                        stdscr.addstr(sy, sx, '    ')
-                except curses.error:
-                    pass
+                if cell:
+                    _draw_str_safe(sy, sx, '    ', curses.color_pair(cell))
+                else:
+                    _draw_str_safe(sy, sx, '    ')
 
     # --- Draw ghost piece ---
     if ghost_y != py:
@@ -326,10 +331,7 @@ def draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used, score,
                     for h_i in range(CELL_H):
                         sy = by + 1 + (ghost_y + row_i) * CELL_H + h_i
                         if by < sy <= by + board_pixel_h:
-                            try:
-                                stdscr.addstr(sy, sx, '::::', curses.A_DIM)
-                            except curses.error:
-                                pass
+                            _draw_str_safe(sy, sx, '::::', curses.A_DIM)
 
     # --- Draw current piece (on top of ghost) ---
     for row_i, row in enumerate(shape):
@@ -339,16 +341,10 @@ def draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used, score,
                 for h_i in range(CELL_H):
                     sy = by + 1 + (py + row_i) * CELL_H + h_i
                     if by < sy <= by + board_pixel_h:
-                        try:
-                            stdscr.addstr(sy, sx, '    ', curses.color_pair(color))
-                        except curses.error:
-                            pass
+                        _draw_str_safe(sy, sx, '    ', curses.color_pair(color))
 
     # --- Left panel: Hold piece ---
-    try:
-        stdscr.addstr(by, lx, 'Hold:', curses.A_BOLD)
-    except curses.error:
-        pass
+    _draw_str_safe(by, lx, 'Hold:', curses.A_BOLD)
     if hold_piece is not None:
         hold_shape, hold_color = hold_piece
         piece_attr = curses.color_pair(hold_color) | (curses.A_DIM if hold_used else 0)
@@ -356,18 +352,78 @@ def draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used, score,
             for col_i, cell in enumerate(row):
                 if cell:
                     for h_i in range(CELL_H):
-                        try:
-                            stdscr.addstr(by + 2 + row_i * CELL_H + h_i, lx + col_i * CELL_W,
-                                          '    ', piece_attr)
-                        except curses.error:
-                            pass
+                        _draw_str_safe(by + 2 + row_i * CELL_H + h_i, lx + col_i * CELL_W,
+                                      '    ', piece_attr)
     else:
+        _draw_str_safe(by + 2, lx, 'EMPTY')
+
+    # --- Right panel: stats + Next ---
+    ix = bx + board_pixel_w + 4
+    iy = by
+
+    def info(row, text, bold=False):
+        attr = curses.A_BOLD if bold else 0
+        _draw_str_safe(iy + row, ix, text, attr)
+
+    info(0,  'TETRIS', bold=True)
+    info(2,  'Score:')
+    info(3,  str(score))
+    info(5,  'Level:')
+    info(6,  str(level))
+    info(8,  'Lines:')
+    info(9,  str(lines))
+    info(11, 'Next:')
+
+    for row_i, row in enumerate(next_shape):
+        for col_i, cell in enumerate(row):
+            if cell:
+                for h_i in range(CELL_H):
+                    _draw_str_safe(iy + 13 + row_i * CELL_H + h_i,
+                                  ix + col_i * CELL_W, '    ', curses.color_pair(next_color))
+
+    info(19, 'Controls:', bold=True)
+    info(20, '←→  Move')
+    info(21, '↑    Rotate')
+    info(22, '↓    Soft drop')
+    info(23, 'Spc  Hard drop')
+    info(24, 'F    Hold')
+    info(25, 'P    Pause')
+    info(26, 'L    Leaderboard')
+    info(27, 'R    Restart')
+    info(28, 'Q    Quit')
+
+    # --- Terminal size warning overlay ---
+    if render_errors:
+        msg = '  터미널 크기가 충분하지 않습니다. Q:종료 R:재시작  '
         try:
-            stdscr.addstr(by + 2, lx, 'EMPTY')
+            stdscr.addstr(by + board_pixel_h // 2, bx + (board_pixel_w + 2 - len(msg)) // 2,
+                          msg, curses.A_REVERSE | curses.A_BOLD)
         except curses.error:
             pass
 
-    # --- Right panel: stats + Hold ---
+    # --- Paused overlay ---
+    if paused:
+        msg = '  PAUSED  '
+        try:
+            stdscr.addstr(by + board_pixel_h // 2, bx + (board_pixel_w + 2 - len(msg)) // 2,
+                          msg, curses.A_REVERSE | curses.A_BOLD)
+        except curses.error:
+            pass
+
+    # --- Game Over overlay ---
+    if game_over:
+        overlay_msgs = ['  GAME OVER  ', f'  Score: {score}  ', '  R:Restart  L:Board  Q:Quit  ']
+        mid_y = by + board_pixel_h // 2 - 1
+        for i, msg in enumerate(overlay_msgs):
+            try:
+                stdscr.addstr(mid_y + i, bx + (board_pixel_w + 2 - len(msg)) // 2,
+                              msg, curses.A_REVERSE | curses.A_BOLD)
+            except curses.error:
+                pass
+
+    stdscr.refresh()
+
+    # --- Right panel: stats + Next ---
     ix = bx + board_pixel_w + 4
     iy = by
 
@@ -546,22 +602,31 @@ def main(stdscr):
                     px = BOARD_WIDTH // 2 - len(shape[0]) // 2
                     py = 0
                     if not is_valid(board, shape, px, py):
-                        name = input_name(stdscr, score)
-                        save_score(score, level, total_lines, name)
-                        stdscr.nodelay(False)
-                        while True:
-                            draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used,
-                                 score, level, total_lines, paused=False, game_over=True)
-                            k = stdscr.getch()
-                            if k in (ord('q'), ord('Q')):
-                                game_result = 'quit'
+                        # Try once more with slight offset (board full → no room anywhere)
+                        shifted_ok = False
+                        for off in (-1, +1):
+                            if is_valid(board, shape, px + off, py):
+                                px += off
+                                shifted_ok = True
                                 break
-                            if k in (ord('r'), ord('R')):
-                                game_result = 'restart'
-                                break
-                            if k in (ord('l'), ord('L')):
-                                show_leaderboard(stdscr, highlight_score=score)
-                        break
+                        if not shifted_ok:
+                            # Board full — show game over with retry option
+                            name = input_name(stdscr, score)
+                            save_score(score, level, total_lines, name)
+                            stdscr.nodelay(False)
+                            while True:
+                                draw(stdscr, board, piece, px, py, next_piece, hold_piece, hold_used,
+                                     score, level, total_lines, paused=False, game_over=True)
+                                k = stdscr.getch()
+                                if k in (ord('q'), ord('Q')):
+                                    game_result = 'quit'
+                                    break
+                                if k in (ord('r'), ord('R')):
+                                    game_result = 'restart'
+                                    break
+                                if k in (ord('l'), ord('L')):
+                                    show_leaderboard(stdscr, highlight_score=score)
+                            break
 
             # --- Gravity ---
             if now - last_fall >= get_fall_speed(level):
